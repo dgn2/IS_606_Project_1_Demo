@@ -1,0 +1,315 @@
+Monte Carlo Resampling (a.k.a Bootstrapping)
+========================================================
+author: Derek G. Nokes
+date: 2015-03-03
+
+Introduction
+========================================================
+
+Bootstrap:  "to pull oneself up by one's bootstraps"; 
+to seemingly do the impossible
+
+- Much of early statistics was about what to do when
+we **didn't have enough data**
+
+- Now we are more likely to have **too much data**
+
+- In early statistics we needed computational shortcuts
+
+- Now we have immense computational power
+
+- Bootstrap resampling allows us harness computational 
+power to get an infinite amount of data
+
+Load the Data
+========================================================
+
+We load some data
+
+```{r}
+# load the data
+colClasses=c('POSIXct','numeric','numeric',
+             'numeric','numeric','numeric',
+             'numeric')
+# load the sales data
+path<-"C:/Users/dgn2/Documents/R/IS606/"
+salesFile<-"sales.csv"
+sales <- read.csv(paste0(path,salesFile),
+                  header=TRUE,
+                  stringsAsFactors=FALSE,
+                  colClasses=colClasses)
+# load the price and cost details
+detailsFile<-"details.csv"
+details <- read.csv(paste0(path,detailsFile),
+                    header=TRUE,
+                    stringsAsFactors=FALSE)
+```
+
+
+P&L
+========================================================
+
+```{r}
+# extract the price and cost of each product
+turkeyPrice<-details$price[2]
+turkeyCost<-details$cost[2]
+
+# define the function to compute revenue, expense, and P&L
+pnlUnderScenario<- function(demand,supply,pricePerUnit,
+                            costPerUnit){
+  expense<-supply*costPerUnit
+  unitsSold<-demand
+  flag<-supply-demand<0
+  unitsSold[flag]<-supply[flag]
+  revenue<-unitsSold*pricePerUnit
+  pnl<-sum(revenue-expense)
+  }
+```
+
+Supply & Demand
+========================================================
+Let's take a look at the P&L
+
+```{r}
+# turkey revenue, expense, and P&L
+turkeyDemand<-sales[,3]
+turkeySupply<-sales[,6]
+turkeyExpense<-turkeySupply*turkeyCost
+turkeyUnitsSold<-turkeyDemand
+turkeyFlag<-turkeySupply-turkeyDemand<0
+turkeyUnitsSold[turkeyFlag]<-turkeySupply[
+  turkeyFlag]
+turkeyRevenue<-turkeyUnitsSold*turkeyPrice
+turkeyPnl<-turkeyRevenue-turkeyExpense
+```
+
+Supply & Demand
+========================================================
+Let's take a look at the supply & demand:
+
+```{r,echo=FALSE}
+plot(turkeyDemand, type='l', xlab="Day", 
+     ylab="Turkey")
+lines(turkeySupply, type='l', col="Red")
+```
+
+
+Visual inspection indicates that the demand is 
+typically above the supply
+
+Resample the Data
+========================================================
+
+We sample from the data with replacement
+
+```{r}
+# set the parameters for resampling
+dimension<-dim(sales)
+nRows<-dimension[1]
+nCols<-dimension[2]
+nPaths<-1000
+# create the data resampling index
+resampleIndex<-sample(1:nRows,
+                      nRows*nPaths,
+                      replace=TRUE,
+                      prob=NULL)
+
+# create the resampled data for each column
+resampledData<-sales[resampleIndex,]
+```
+
+Reshape the Data
+========================================================
+
+Re-organize the data so that we have nRows by nPath
+matrix
+
+```{r}
+# reshape the demand data
+turkeyDemandPaths<-data.frame(matrix(
+  resampledData[,3],nrow=nRows,ncol=nPaths))
+# reshape the supply data
+turkeySupplyPaths<-data.frame(matrix(
+  resampledData[,6],nrow=nRows,ncol=nPaths))
+
+```
+
+Each row represents a point in time and each column
+represents an alternate reality consistent with the
+variability of observed observations
+
+Compute the Statistic we Care About
+========================================================
+
+Say we care about the expected value of supply versus
+demand.
+
+```{r}
+turkeyCumulativeDemand<-cumsum(
+  turkeyDemandPaths)
+turkeyCumulativeSupply<-cumsum(
+  turkeySupplyPaths)
+```
+
+Resampling gives us a number of alternate realities
+consistent with the variation in the data
+
+Compute the Statistic we Care About - Continued
+========================================================
+
+From these paths / alternate realities we can
+determine the distribution of the statistic of
+interest (in this case, the expected value)
+
+```{r}
+turkeyExpectedDemand<-mean(as.numeric(
+  turkeyCumulativeDemand[nRows,]/nRows))
+turkeyExpectedSupply<-mean(as.numeric(
+  turkeyCumulativeSupply[nRows,]/nRows))
+```
+
+The expected demand for turkey significantly 
+exceeded supply (`r turkeyExpectedDemand` versus 
+`r turkeyExpectedSupply`).
+
+Distribution of Turkey Supply & Demand
+========================================================
+
+```{r,echo=FALSE}
+library('ggplot2')
+demand<-as.numeric(turkeyCumulativeDemand[
+  nRows,]/nRows)
+supply<-as.numeric(turkeyCumulativeSupply[
+  nRows,]/nRows)
+df <- data.frame(sandwitch = factor(rep(c("demand",
+  "supply"),each=2*nPaths)),units = c(demand,supply))
+ggplot(df, aes(x=units, fill=sandwitch)) + 
+  geom_histogram(binwidth=.1, alpha=.5, 
+  position="identity")
+```
+
+Notice the complete separation between the two 
+distributions
+
+Find the P&L Distribution
+========================================================
+
+We find the distribution of P&L by resampling the 
+original supply and demand.
+
+```{r}
+# find the distribution of P&L using the original supply 
+# and demand
+turkeyPnLUnderScenarios<-0
+
+for (pathIndex in 1:nPaths){
+  turkeyPnLUnderScenarios[pathIndex]<-
+    pnlUnderScenario(
+    turkeyDemandPaths[,pathIndex],
+    turkeySupplyPaths[,pathIndex],turkeyPrice,
+    turkeyCost)
+  }
+```
+
+P&L Distribution Visualization
+========================================================
+
+```{r,echo=FALSE}
+library('ggplot2')
+qplot(turkeyPnLUnderScenarios, geom = "density",
+      main='P&L Distribution',xlab='P&L',
+      ylab='Frequency')
+```
+
+Optimizing Expected P&L
+========================================================
+```{r}
+# maximize turkey P&L for each price scenario
+turkeySupplyRange<-min(turkeyDemand):
+  max(turkeyDemand)
+nScenarios<-length(turkeySupplyRange)
+turkeyPnLUnderSupplyScenarios<-matrix(rep(0,
+  nPaths*nScenarios),nrow=nPaths,ncol=nScenarios)
+for (scenarioIndex in 1:nScenarios){
+  turkeySupplyScenario<-rep(turkeySupplyRange[
+    scenarioIndex],nRows,nrow=nRows,ncol=1)
+  for (pathIndex in 1:nPaths){
+    turkeyPnLUnderSupplyScenarios[pathIndex,
+      scenarioIndex]<-pnlUnderScenario(
+    turkeyDemandPaths[,pathIndex],
+      turkeySupplyScenario,
+      turkeyPrice,turkeyCost)
+  }
+}
+```
+We can determine the distribution of P&L for a range 
+of supply scenarios, then find the supply that maximizes 
+expected P&L for each product.
+
+Optimizing Expected P&L - Continued
+========================================================
+
+```{r}
+# compute the expected P&L under each scenario
+turkeyExpectedPnLUnderScenario<-colMeans(
+  turkeyPnLUnderSupplyScenarios)
+# compute the percentile bounds
+lowerBound<-apply(turkeyPnLUnderSupplyScenarios, 2, 
+                  quantile, probs = c(0.05))
+upperBound<-apply(turkeyPnLUnderSupplyScenarios, 2, 
+                  quantile, probs = c(0.95))
+# find the max P&L
+turkeyMaxExpectedPnLUnderScenario<-max(
+  turkeyExpectedPnLUnderScenario)
+# find the max P&L index
+turkeyMaxIndex<-turkeyExpectedPnLUnderScenario==
+  turkeyMaxExpectedPnLUnderScenario
+# find the optimal supply
+turkeyOptimalSupply<-turkeySupplyRange[
+  turkeyMaxIndex]
+```
+
+Expected P&L By Supply Scenario
+========================================================
+The expected P&L of `r turkeyMaxExpectedPnLUnderScenario/nRows` by day for 
+turkey is maximized by supplying `r turkeyOptimalSupply` units each day.
+
+```{r,echo=FALSE}
+# plot the expected P&L and 5% and 95% confidence interval
+plot(turkeySupplyRange,
+     turkeyExpectedPnLUnderScenario,type='l',
+     xlab='Supply',ylab='P&L',
+     main='Expected P&L By Supply Scenario')
+points(turkeyOptimalSupply,
+       turkeyMaxExpectedPnLUnderScenario)
+lines(turkeySupplyRange, lowerBound, lty = "dotted")
+lines(turkeySupplyRange, upperBound, lty = "dotted")
+```
+
+How does this help us?
+========================================================
+- Visualize variation
+- Determine the distribution of any statistic/parameter; 
+helps determine whether a result could be explained just
+by variation (i.e., significance)
+- Solve path-dependent problems
+
+**Most Important Points:**
+- Anyone can use this to get the right answer
+- Anyone can understand this
+- Computational power is cheaper than the skills 
+needed to get the right answer the traditional way!
+- *Welcome to the era of computation!*
+
+References
+========================================================
+
+Efron, Bradley; Tibshirani, Robert J. (1993). An 
+introduction to the bootstrap, New York: Chapman & Hall.
+
+Simon, J. L. The Philosophy and Practice of Resampling 
+Statistics
+http://www.juliansimon.com/writings/Resampling_Philosophy/
+
+Simon, J. L. (1997): Resampling: The New Statistics
+http://www.resample.com/intro-text-online/
